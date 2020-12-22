@@ -15,6 +15,10 @@ function repairSignatureV(signature) {
     signature = signature.slice(0,130) + v.slice(2)
     return signature
 }
+async function getSignature(message, address) {
+    const signature = await web3.eth.sign(message, address)
+    return repairSignatureV(signature)
+}
 
 // contract("MultiSigSimple", (accounts) => {
 
@@ -316,41 +320,40 @@ contract("MultiSigSingleTransaction", (accounts) => {
         const wallet4 = accounts[4]
         const wallet5 = accounts[5]
 
-        const message = "lololololol"
-        const directHash = web3.utils.sha3(message)
-        const prefixHex = web3.utils.utf8ToHex("\x19Ethereum Signed Message:\n32")
-        // console.log("prefixHex: " + prefixHex)
 
-        const ethMessage = prefixHex + directHash.slice(2)
-        const ethMessageHash = web3.utils.sha3(ethMessage)
-
-        const signature0 = repairSignatureV(await web3.eth.sign(directHash, wallet0))
-        const signature1 = repairSignatureV(await web3.eth.sign(directHash, wallet1))
-        const signature2 = repairSignatureV(await web3.eth.sign(directHash, wallet2))
-
-        const recovered0 = await multiSig.recoverAddress(ethMessageHash, signature0)
-        const recovered1 = await multiSig.recoverAddress(ethMessageHash, signature1)
-        const recovered2 = await multiSig.recoverAddress(ethMessageHash, signature2)
-        console.log(recovered0)
-        console.log(recovered1)
-        console.log(recovered2)
-
-        const signatures01 = signature0 + signature1.slice(2)
-        const signatures012 = signature0 + signature1.slice(2) + signature2.slice(2)
-
-        var result = await multiSig.addRelevantWallet(wallet1, ethMessageHash, "0x00")
+        var result = await multiSig.addRelevantWallet(wallet1, "0x00")
         console.log(result.receipt.gasUsed)
 
-        var result = await multiSig.addRelevantWallet(wallet1, ethMessageHash, signature0, {from: wallet1})
+        var message = await multiSig.getWalletActionMessage(wallet2)
+        console.log(message)
+        var signature0 = await getSignature(message, wallet0)
+        console.log(signature0)
+
+        var result = await multiSig.addRelevantWallet(wallet2, signature0, {from: wallet1})
         console.log(result.receipt.gasUsed)
 
-        var result = await multiSig.addRelevantWallet(wallet2, ethMessageHash, signature0, {from: wallet1})
+        var message = await multiSig.getWalletActionMessage(wallet3)
+        console.log(message)
+        var signature0 = await getSignature(message, wallet0)
+        console.log(signature0)
+        var signature1 = await getSignature(message, wallet1)
+        console.log(signature1)
+        var signatures01 = signature0 + signature1.slice(2)
+
+        var result = await multiSig.addRelevantWallet(wallet3, signatures01, {from: wallet2})
         console.log(result.receipt.gasUsed)
 
-        var result = await multiSig.addRelevantWallet(wallet3, ethMessageHash, signatures01, {from: wallet2})
-        console.log(result.receipt.gasUsed)
+        var message = await multiSig.getWalletActionMessage(wallet4)
+        console.log(message)
+        var signature0 = await getSignature(message, wallet0)
+        console.log(signature0)
+        var signature1 = await getSignature(message, wallet1)
+        console.log(signature1)
+        var signature2 = await getSignature(message, wallet2)
+        console.log(signature2)
+        var signatures012 = signature0 + signature1.slice(2) + signature2.slice(2)
 
-        var result = await multiSig.addRelevantWallet(wallet4, ethMessageHash, signatures012, {from: wallet3})
+        var result = await multiSig.addRelevantWallet(wallet4, signatures012, {from: wallet3})
         console.log(result.receipt.gasUsed)
 
         var relevant = await multiSig.relevantWallets(wallet0)
