@@ -5,7 +5,7 @@ MAX_WALLETS: constant(uint256) = 5
 
 V_MASK: constant(uint256) = 255
 
-PREFIX: constant(Bytes[28]) = 0x19457468657265756d205369676e6564204d6573736167653a0a3634
+PREFIX: constant(Bytes[28]) = 0x19457468657265756d205369676e6564204d6573736167653a0a3936
 
 INITIAL_PONCE: constant(bytes32) = 0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef
 
@@ -41,7 +41,7 @@ def getMaxWallets() -> uint256:
 ############################################################
 @external
 @view
-def recoverAddress(_hash:bytes32, _signature:Bytes[65]) -> address:
+def recoverAddressSig(_hash:bytes32, _signature:Bytes[65]) -> address:
     _v: uint256 = 0
     _r: uint256 = 0
     _s: uint256 = 0
@@ -55,37 +55,39 @@ def recoverAddress(_hash:bytes32, _signature:Bytes[65]) -> address:
 
 @external
 @view
-def getETHMessage64Hash(_message:Bytes[64]) -> bytes32:
+def recoverAddressParams(_hash:bytes32, _v: uint256, _r:uint256, _s:uint256) -> address:
+    return ecrecover(_hash, _v, _r, _s)
+
+
+@external
+@view
+def getETHMessage96Hash(_message:Bytes[96]) -> bytes32:
     _ethMessageHash: bytes32 = keccak256(concat(PREFIX, _message))
     return _ethMessageHash
 
 ############################################################
 @external
 @view
-def extractAddress(_message: Bytes[64]) -> address:
-    _address: address = extract32(_message, 0, output_type=address)
-    return _address
-
-############################################################
-@external
-@view
-def getWalletActionMessage(_wallet:address) -> Bytes[64]:
+def getWalletActionMessage(_wallet:address) -> Bytes[96]:
     _addressBytes32: bytes32 = convert(_wallet, bytes32)
-    _messageBytes: Bytes[64] = concat(_addressBytes32, self.ponce)
+    _sender: bytes32 = convert(msg.sender, bytes32)
+    _messageBytes: Bytes[96] = concat(_addressBytes32, self.ponce, _sender)
     return _messageBytes
 
 @external
 @view
-def getSendEtherMessage(_amount:uint256) -> Bytes[64]:
+def getSendEtherMessage(_amount:uint256) -> Bytes[96]:
     _amountBytes32: bytes32 = convert(_amount, bytes32)
-    _messageBytes: Bytes[64] = concat(_amountBytes32, self.ponce)
+    _sender: bytes32 = convert(msg.sender, bytes32)
+    _messageBytes: Bytes[96] = concat(_amountBytes32, self.ponce, _sender)
     return _messageBytes
 
 @external
 @view
-def getTransactionMessage(_transaction: Bytes[1024]) -> Bytes[64]:
+def getTransactionMessage(_transaction: Bytes[1024]) -> Bytes[96]:
     _transactionHash: bytes32 = keccak256(_transaction)
-    _messageBytes: Bytes[64] = concat(_transactionHash, self.ponce)
+    _sender: bytes32 = convert(msg.sender, bytes32)
+    _messageBytes: Bytes[96] = concat(_transactionHash, self.ponce, _sender)
     return _messageBytes
 
 
@@ -98,7 +100,7 @@ def getTransactionMessage(_transaction: Bytes[1024]) -> Bytes[64]:
 ############################################################
 #region add/remove wallets
 @external
-def addRelevantWallet(_wallet:address, _signatures: Bytes[325]) -> bool:
+def addRelevantWallet(_wallet:address, _vs:uint256[5], _rs:uint256[5], _ss:uint256[5]) -> bool:
     if self.relevantWallets[_wallet]:
         return True
     assert _wallet != ZERO_ADDRESS
@@ -108,15 +110,10 @@ def addRelevantWallet(_wallet:address, _signatures: Bytes[325]) -> bool:
     _approvers: address[5] = [ZERO_ADDRESS,ZERO_ADDRESS,ZERO_ADDRESS,ZERO_ADDRESS,ZERO_ADDRESS]
     _approvals: uint256 = 0
     
-    _hash: bytes32 = keccak256(concat(PREFIX, convert(_wallet, bytes32), self.ponce))
-    self.ponce = _hash
-
-    _v: uint256 = 0
-    _r: uint256 = 0
-    _s: uint256 = 0
+    _sender: bytes32 = convert(msg.sender, bytes32)
+    _hash: bytes32 = keccak256(concat(PREFIX, convert(_wallet, bytes32), self.ponce, _sender))
 
     _addr: address = ZERO_ADDRESS
-    _len: int128 = convert(len(_signatures), int128)
 
     if self.relevantWallets[msg.sender]:
         self.relevantWallets[msg.sender] = False # no double vote!
@@ -124,14 +121,10 @@ def addRelevantWallet(_wallet:address, _signatures: Bytes[325]) -> bool:
         _approvals += 1
     
     ########################################################
-    for i in [0,65,130,195,260]:
-        if _len < i+65:
+    for i in range(5):
+        if _ss[i] == 0:
             break
-        _r = extract32(_signatures, i, output_type=uint256)
-        _s = extract32(_signatures, i+32, output_type=uint256)
-        _v = extract32(_signatures, i+33, output_type=uint256)
-        _v = bitwise_and(_v, V_MASK)
-        _addr = ecrecover(_hash, _v, _r, _s)
+        _addr = ecrecover(_hash, _vs[i], _rs[i], _ss[i])
         if self.relevantWallets[_addr]: # on ZERO_ADDRESS this will never be True
             self.relevantWallets[_addr] = False # no double vote!
             _approvers[_approvals] = _addr
@@ -152,7 +145,69 @@ def addRelevantWallet(_wallet:address, _signatures: Bytes[325]) -> bool:
     ########################################################
     self.relevantWallets[_wallet] = True
     self.relevantVotes = _requiredVotes + 1
+    log WalletAdded(_wallet, self.ponce)
+    self.ponce = _hash
     return True
+
+
+# @external
+# def addRelevantWallet(_wallet:address, _signatures: Bytes[325]) -> bool:
+#     if self.relevantWallets[_wallet]:
+#         return True
+#     assert _wallet != ZERO_ADDRESS
+#     _requiredVotes: uint256 = self.relevantVotes
+#     assert _requiredVotes < MAX_WALLETS 
+
+#     _approvers: address[5] = [ZERO_ADDRESS,ZERO_ADDRESS,ZERO_ADDRESS,ZERO_ADDRESS,ZERO_ADDRESS]
+#     _approvals: uint256 = 0
+    
+#     _sender: bytes32 = convert(msg.sender, bytes32)
+#     _hash: bytes32 = keccak256(concat(PREFIX, convert(_wallet, bytes32), self.ponce, _sender))
+
+#     _v: uint256 = 0
+#     _r: uint256 = 0
+#     _s: uint256 = 0
+
+#     _addr: address = ZERO_ADDRESS
+#     _len: int128 = convert(len(_signatures), int128)
+
+#     if self.relevantWallets[msg.sender]:
+#         self.relevantWallets[msg.sender] = False # no double vote!
+#         _approvers[_approvals] = msg.sender
+#         _approvals += 1
+    
+#     ########################################################
+#     for i in [0,65,130,195,260]:
+#         if _len < i+65:
+#             break
+#         _r = extract32(_signatures, i, output_type=uint256)
+#         _s = extract32(_signatures, i+32, output_type=uint256)
+#         _v = extract32(_signatures, i+33, output_type=uint256)
+#         _v = bitwise_and(_v, V_MASK)
+#         _addr = ecrecover(_hash, _v, _r, _s)
+#         if self.relevantWallets[_addr]: # on ZERO_ADDRESS this will never be True
+#             self.relevantWallets[_addr] = False # no double vote!
+#             _approvers[_approvals] = _addr
+#             _approvals += 1
+
+#     ########################################################
+#     assert _approvals == _requiredVotes
+#     #  Hurray! Everybody approved!    
+    
+#     ########################################################
+#     # give back vote privilege to relevant Voters
+#     for _approver in _approvers:
+#         if _approver == ZERO_ADDRESS:
+#             break
+#         else:
+#             self.relevantWallets[_approver] = True
+    
+#     ########################################################
+#     self.relevantWallets[_wallet] = True
+#     self.relevantVotes = _requiredVotes + 1
+#     log WalletAdded(_wallet, self.ponce)
+#     self.ponce = _hash
+#     return True
 
 @external
 def removeRelevantWallet(_wallet: address, _signatures: Bytes[325]) -> bool:
@@ -166,8 +221,8 @@ def removeRelevantWallet(_wallet: address, _signatures: Bytes[325]) -> bool:
     _approvers: address[5] = [ZERO_ADDRESS,ZERO_ADDRESS,ZERO_ADDRESS,ZERO_ADDRESS,ZERO_ADDRESS]
     _approvals: uint256 = 0
     
-    _hash: bytes32 = keccak256(concat(PREFIX, convert(_wallet, bytes32), self.ponce))
-    self.ponce = _hash
+    _sender: bytes32 = convert(msg.sender, bytes32)
+    _hash: bytes32 = keccak256(concat(PREFIX, convert(_wallet, bytes32), self.ponce, _sender))
     
     _v: uint256 = 0
     _r: uint256 = 0
@@ -212,7 +267,11 @@ def removeRelevantWallet(_wallet: address, _signatures: Bytes[325]) -> bool:
         if _approver == ZERO_ADDRESS:
             break
         else:
-            self.relevantWallets[_approver] = True    
+            self.relevantWallets[_approver] = True
+
+    self.relevantVotes = _requiredVotes
+    log WalletRemoved(_wallet, self.ponce)
+    self.ponce = _hash
     return True
 
 #endregion
